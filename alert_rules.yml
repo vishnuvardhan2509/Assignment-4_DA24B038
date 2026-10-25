@@ -1,0 +1,42 @@
+# AI attribution: Prompt: "Write DA3408 alerts matching caption_* metrics for
+# application down, high mean inference latency, error ratio, CPU and RAM;
+# guard low-volume error ratios and document units and thresholds."
+groups:
+  - name: caption-observatory
+    rules:
+      - alert: CaptionApplicationDown
+        expr: up{job="caption-app"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: Caption metrics endpoint is unavailable
+          description: Prometheus has failed to scrape the application for 30 seconds.
+      - alert: CaptionHighInferenceLatency
+        expr: sum(rate(caption_inference_seconds_sum[2m])) / clamp_min(sum(rate(caption_inference_seconds_count[2m])), 0.000001) > 10
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Mean CPU inference latency exceeds 10 seconds
+      - alert: CaptionHighErrorRatio
+        expr: (sum(increase(caption_images_total{outcome="error"}[5m])) / clamp_min(sum(increase(caption_images_total[5m])), 1) > 0.2) and (sum(increase(caption_images_total[5m])) >= 5)
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 20 percent of images failed in five minutes
+      - alert: HostHighCPU
+        expr: 100 * (1 - avg(rate(node_cpu_seconds_total{mode="idle",job="node"}[2m]))) > 85
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Mean host CPU utilization exceeds 85 percent
+      - alert: HostHighMemory
+        expr: 100 * (1 - node_memory_MemAvailable_bytes{job="node"} / node_memory_MemTotal_bytes{job="node"}) > 85
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Host RAM utilization exceeds 85 percent

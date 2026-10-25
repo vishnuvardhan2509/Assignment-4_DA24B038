@@ -1,0 +1,90 @@
+# Linux/Ubuntu; use the host CA bundle to preserve TLS verification behind proxies.
+# AI regex prompt: include overlay cloud filesystems while excluding pseudo filesystems.
+name: assignment4
+services:
+  prometheus:
+    image: prom/prometheus@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
+    network_mode: host
+    command:
+    - --config.file=/etc/prometheus/prometheus.yml
+    - --web.listen-address=127.0.0.1:9090
+    volumes:
+    - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    - ./alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+    - prometheus-data:/prometheus
+  node-exporter:
+    image: prom/node-exporter@sha256:d00a542e409ee618a4edc67da14dd48c5da66726bbd5537ab2af9c1dfc442c8a
+    network_mode: host
+    pid: host
+    command:
+    - --path.rootfs=/host
+    - --web.listen-address=127.0.0.1:9100
+    - --collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$$
+    volumes:
+    - /:/host:ro,rslave
+  grafana:
+    image: grafana/grafana@sha256:74144189b38447facf737dfd0f3906e42e0776212bf575dc3334c3609183adf7
+    network_mode: host
+    environment:
+      GF_SERVER_HTTP_ADDR: 127.0.0.1
+      GF_ANALYTICS_REPORTING_ENABLED: 'false'
+      GF_ANALYTICS_CHECK_FOR_UPDATES: 'false'
+      GF_USERS_DEFAULT_THEME: light
+      GF_PATHS_PROVISIONING: /tmp/provisioning
+    volumes:
+    - ./monitoring/grafana-dashboard.json:/var/lib/grafana/dashboards/grafana-dashboard.json:ro
+    - grafana-data:/var/lib/grafana
+    entrypoint:
+    - /bin/sh
+    - -ec
+    command:
+    - "mkdir -p /tmp/provisioning/datasources /tmp/provisioning/dashboards\ncat > /tmp/provisioning/datasources/prometheus.yml <<'EOF'\napiVersion: 1\ndatasources:\n  - name: Prometheus\n    uid: prometheus\n    type: prometheus\n    access: proxy\n    url: http://127.0.0.1:9090\n    isDefault: true\n    editable: false\nEOF\ncat > /tmp/provisioning/dashboards/provider.yml <<'EOF'\napiVersion: 1\nproviders:\n  - name: Caption Observatory\n    orgId: 1\n    folder: DA3408\n    type: file\n    options:\n      path: /var/lib/grafana/dashboards\nEOF\nexec /run.sh\n"
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    network_mode: host
+    command:
+    - --config.file=/etc/alertmanager/alertmanager.yml
+    - --web.listen-address=127.0.0.1:9093
+    - --cluster.listen-address=
+    volumes:
+    - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    - alertmanager-data:/alertmanager
+  app:
+    image: python:3.12-slim
+    network_mode: host
+    working_dir: /app
+    environment:
+      HF_HOME: /models
+      HF_HUB_DISABLE_XET: '1'
+      CPU_THREADS: '2'
+      PYTHONUNBUFFERED: '1'
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: 127.0.0.1,localhost
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+      REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
+    volumes:
+    - ./app.py:/app/app.py:ro
+    - ./requirements.txt:/app/requirements.txt:ro
+    - ./.cache/huggingface:/models
+    - app-deps:/opt/venv
+    - ${SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.crt}:/etc/ssl/certs/ca-certificates.crt:ro
+    command:
+    - /bin/sh
+    - -ec
+    - "if [ ! -x /opt/venv/bin/python ]; then python -m venv /opt/venv; fi\nchecksum=$$(sha256sum requirements.txt | cut -d ' ' -f 1)\nif [ \"$$checksum\" != \"$$(cat /opt/venv/.requirements.sha256 2>/dev/null || true)\" ]; then\n  /opt/venv/bin/python -m pip install --no-cache-dir -r requirements.txt\n  printf '%s\\n' \"$$checksum\" > /opt/venv/.requirements.sha256\nfi\nexec /opt/venv/bin/python app.py\n"
+    healthcheck:
+      test:
+      - CMD
+      - /opt/venv/bin/python
+      - -c
+      - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5); urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5)
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 300s
+volumes:
+  prometheus-data: null
+  grafana-data: null
+  alertmanager-data: null
+  app-deps: null
